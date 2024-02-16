@@ -61,10 +61,21 @@ namespace VL.Stride.Games
             //GameContext.RequestedWidth = WindowManager.PreferredBackBufferWidth;
             //GameContext.RequestedHeight = WindowManager.PreferredBackBufferHeight;
             Window = gamePlatform.CreateWindow(GameContext);
-            Window.SetSize(new Int2(WindowManager.PreferredBackBufferWidth, WindowManager.PreferredBackBufferHeight));
 
-            Window.Visible = true;
-            
+
+            // This is know done inside Stride.Windowing.GameWindowManager.
+            //Window.SetSize(new Int2(WindowManager.PreferredBackBufferWidth, WindowManager.PreferredBackBufferHeight));
+
+
+            // Showing the window in this way and at this stage causes it to have a white background at the beginning.
+            // This can be annoying and in case of big Led walls even a bit "dangerous".
+            // To workaround that the window needs to be made visible in another way at a later stage,
+            // after all necessary paramters have been set which currently happens in Stride.Windowing.GameWindowManager (patch).
+            // For more info on the white bg glitch please refer to:
+            // https://stackoverflow.com/questions/69715610/how-to-initialize-the-background-color-of-win32-app-to-something-other-than-whit
+
+            // Window.Visible = true;
+
 
             base.Initialize();
         }
