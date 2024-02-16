@@ -99,9 +99,6 @@ namespace VL.Stride.Games
         }
     }
 
-
-
-
     public enum ShowWindowCommand
     {
         /// <summary>Hides the window and activates another window.</summary>
