@@ -7,6 +7,11 @@ namespace VL.ImGui.Widgets
     [WidgetType(WidgetType.Input)]
     internal partial class InputFloat : InputWidget<float>, IHasInputTextFlags
     {
+        public InputFloat()
+            : base(float.MinValue, float.MaxValue)
+        {
+        }
+
         public float Step { private get; set; } = 0.1f;
 
         public float StepFast { private get; set; } = 10f;
@@ -23,7 +28,7 @@ namespace VL.ImGui.Widgets
         internal override void UpdateCore(Context context)
         {
             var value = Update();
-            if (ImGuiNET.ImGui.InputFloat(widgetLabel.Update(label.Value), ref value, Step, StepFast, string.IsNullOrWhiteSpace(Format) ? null : Format, Flags))
+            if (ImGuiUtils.InputFloat(widgetLabel.Update(label.Value), ref value, Step, StepFast, string.IsNullOrWhiteSpace(Format) ? null : Format, Flags))
                 value = SetClampedValueIfChanged(value);
             lastframeValue = value;
         }

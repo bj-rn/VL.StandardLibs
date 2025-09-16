@@ -1,5 +1,6 @@
 ﻿using Stride.Core.Mathematics;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reflection;
 using VL.Core;
 using VL.Core.EditorAttributes;
@@ -56,6 +57,27 @@ namespace VL.ImGui.Editors
                 // More collections
             }
 
+            // Can we use type conversion to create an editor?
+            if (IsNumericType(staticType))
+            {
+                var channelView = new ChannelView<int>(channel)
+                {
+                    AsT = v => (int)Convert.ChangeType(v, typeof(int))!,
+                    ToObject = v =>
+                    {
+                        try
+                        {
+                            return Convert.ChangeType(v, staticType);
+                        }
+                        catch
+                        {
+                            return default;
+                        }
+                    }
+                };
+                return context.Factory.CreateObjectEditor(channelView, context);
+            }
+
             var typeInfo = context.AppHost.TypeRegistry.GetTypeInfo(staticType);
             if (AllowGeneralObjectEditor(context, typeInfo))
             {
@@ -71,7 +93,7 @@ namespace VL.ImGui.Editors
 
         private static WidgetType GetDefaultWidgetType(Type type)
         {
-            if (IsNumericType(type) || IsVectorType(type))
+            if (IsNumericType(type) || IsVectorType(type) || type == typeof(TimeSpan))
                 return WidgetType.Drag;
 
             if (type == typeof(string))
@@ -123,7 +145,7 @@ namespace VL.ImGui.Editors
                     //    return typeInfo.IsImmutable && typeInfo.AllProperties.All(p => p.Type.IsImmutable || HasEditor(context, p.Type));
                     var type = typeInfo.ClrType;
                     if (context.PrimitiveOnly)
-                        return type.IsPrimitive || type == typeof(string) || type == typeof(object);
+                        return type.IsPrimitive || type == typeof(string) || type == typeof(object) || type.IsAssignableTo(typeof(IOptional));
                     else
                         return true;
                 }

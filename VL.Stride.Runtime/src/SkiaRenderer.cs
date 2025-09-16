@@ -5,6 +5,7 @@ using Stride.Graphics;
 using Stride.Input;
 using Stride.Rendering;
 using System.Reactive.Disposables;
+using VL.Core;
 using VL.Skia;
 using VL.Skia.Egl;
 using VL.Stride.Input;
@@ -16,12 +17,14 @@ namespace VL.Stride
     /// <summary>
     /// Renders the Skia layer into the Stride provided surface.
     /// </summary>
+    [ProcessNode(Category = "Stride.Rendering", FragmentSelection = FragmentSelection.Explicit)]
     public partial class SkiaRenderer : RendererBase
     {
         private static readonly SKColorSpace srgbLinearColorspace = SKColorSpace.CreateSrgbLinear();
         private static readonly SKColorSpace srgbColorspace = SKColorSpace.CreateSrgb();
 
         private readonly SerialDisposable inputSubscription = new SerialDisposable();
+        private readonly ILogger logger;
         private IInputSource lastInputSource;
         private Int2 lastRenderTargetSize;
         private readonly InViewportUpstream viewportLayer = new InViewportUpstream();
@@ -33,6 +36,21 @@ namespace VL.Stride
         public ILayer Layer { get; set; }
 
         public CommonSpace Space { get; set; }
+
+        [Fragment]
+        public SkiaRenderer(NodeContext nodeContext)
+        {
+            logger = nodeContext.GetLogger();
+        }
+
+        [Fragment]
+        [return: Pin(Name = "Output")]
+        public IGraphicsRendererBase Update(ILayer input, CommonSpace space)
+        {
+            Layer = input;
+            Space = space;
+            return this;
+        }
 
         protected override void Destroy()
         {
@@ -52,11 +70,21 @@ namespace VL.Stride
 
             // Fetch the skia render context (uses ANGLE -> DirectX11)
             var skiaRenderContext = SkiaRenderContext.ForCurrentApp();
-            if (msaaAwareEglContext is null || msaaAwareEglContext.SampleCount != sampleCount)
+            if (sampleCount > 1)
+            {
+                var shareContext = skiaRenderContext.EglContext;
+                if (msaaAwareEglContext is null || msaaAwareEglContext.SampleCount != sampleCount || msaaAwareEglContext.ShareContext != shareContext)
+                {
+                    logger.LogWarning("Rendering to a multi-sampled target (Samples={Samples}) may be unstable on some machines. Use the AfterScene stage for rendering when used with RenderEntity node.", sampleCount);
+
+                    msaaAwareEglContext?.Dispose();
+                    msaaAwareEglContext = EglContext.New(shareContext.Display, sampleCount, shareContext);
+                }
+            }
+            else
             {
                 msaaAwareEglContext?.Dispose();
-                var shareContext = skiaRenderContext.EglContext;
-                msaaAwareEglContext = EglContext.New(shareContext.Display, sampleCount, shareContext);
+                msaaAwareEglContext = null;
             }
 
             // Subscribe to input events - in case we have many sinks we assume that there's only one input source active
@@ -71,10 +99,11 @@ namespace VL.Stride
 
             // Make current on current thread for resource creation
             EglSurface eglSurface;
-            using (msaaAwareEglContext.MakeCurrent(forRendering: false))
+            var eglContext = msaaAwareEglContext ?? skiaRenderContext.EglContext;
+            using (eglContext.MakeCurrent(forRendering: false))
             {
                 var nativeTempRenderTarget = SharpDXInterop.GetNativeResource(renderTarget) as Texture2D;
-                eglSurface = msaaAwareEglContext.CreateSurfaceFromClientBuffer(nativeTempRenderTarget.NativePointer);
+                eglSurface = eglContext.CreateSurfaceFromClientBuffer(nativeTempRenderTarget.NativePointer);
             }
             // Make the surface current (becomes default FBO)
             using (eglSurface)

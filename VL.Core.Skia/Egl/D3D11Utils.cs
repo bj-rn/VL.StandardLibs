@@ -43,7 +43,34 @@ namespace VL.Skia.Egl
         }
 
         [SupportedOSPlatform("windows6.1")]
-        public static unsafe SKImage TextureToSKImage(this RenderContext renderContext, nint d3d11Texture)
+        public static unsafe SKImage SharedHandleToSKImage(RenderContext renderContext, nint sharedHandle)
+        {
+            if (!renderContext.EglContext.Display.TryGetD3D11Device(out var d3dDevicePtr))
+                return null;
+
+            var d3dDevice = (ID3D11Device*)d3dDevicePtr;
+            // Open on D3D11 device of vvvv
+            ID3D11Texture2D* d3d11Texture;
+            {
+                ID3D11Resource* sharedResource;
+                Guid iid = ID3D11Resource.IID_Guid;
+                d3dDevice->OpenSharedResource((Windows.Win32.Foundation.HANDLE)sharedHandle, &iid, (void**)&sharedResource);
+                sharedResource->QueryInterface(out d3d11Texture);
+                sharedResource->Release();
+            }
+
+            try
+            {
+                return TextureToSKImage(renderContext, (nint)d3d11Texture);
+            }
+            finally
+            {
+                d3d11Texture->Release();
+            }
+        }
+
+        [SupportedOSPlatform("windows6.1")]
+        public static unsafe SKImage TextureToSKImage(RenderContext renderContext, nint d3d11Texture)
         {
             using var eglImage = renderContext.EglContext.CreateImageFromD3D11Texture(d3d11Texture);
 
@@ -76,7 +103,7 @@ namespace VL.Skia.Egl
                 backendTexture,
                 GRSurfaceOrigin.TopLeft,
                 colorType,
-                SKAlphaType.Premul,
+                SKAlphaType.Unpremul,
                 // TODO: Check this, seems to make no difference
                 colorspace: renderContext.UseLinearColorspace && desc.Format.ShouldUseLinearColorSpace() ? SKColorSpace.CreateSrgbLinear() : SKColorSpace.CreateSrgb(),
                 releaseProc: x =>

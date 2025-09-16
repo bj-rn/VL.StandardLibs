@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -17,6 +18,67 @@ using VL.Lib.Collections;
 
 namespace VL.Lib.Reactive
 {
+    public class AccessorNodes : IDisposable
+    {
+        public class AccessorNode
+        {
+            public NodePath Path { get; private set; }
+
+            public UniqueId ID => Path.Stack.Peek();
+
+            private int refCount;
+
+            public AccessorNode(NodePath path)
+            {
+                Path = path;
+            }
+
+            public void AddRef()
+            {
+                Interlocked.Increment(ref refCount);
+            }
+
+            public void Release()
+            {
+                Interlocked.Decrement(ref refCount);
+            }
+
+            public bool IsAlive => refCount > 0;
+        }
+
+        readonly IChannel<ConcurrentDictionary<UniqueId, AccessorNode>> nodes 
+            = Channel.Create(new ConcurrentDictionary<UniqueId, AccessorNode>());
+
+        public IChannel<ConcurrentDictionary<UniqueId, AccessorNode>> Nodes => nodes;
+
+        public void AddAccessorNode(NodeContext node)
+        {
+            var nodepath = node.Path;
+            var accessorNode = nodes.Value.GetOrAdd(nodepath.Stack.Peek(), _ => new AccessorNode(nodepath));
+            accessorNode.AddRef();
+            nodes.SetValue(nodes.Value);
+        }
+
+        public void RemoveAccessorNode(NodeContext node)
+        {
+            if (!nodes.Enabled)
+                return;
+            var uniqueId = node.Path.Stack.Peek();
+            if (nodes.Value.TryGetValue(uniqueId, out var accessorNode))
+            {
+                accessorNode.Release();
+                if (!accessorNode.IsAlive)
+                    nodes.Value.TryRemove(uniqueId, out _);
+                nodes.SetValue(nodes.Value);
+            }
+        }
+
+        public void Dispose()
+        {
+            nodes.Dispose();
+        }
+    }
+
     public interface IChannel : IHasAttributes, IDisposable
     {
         Type ClrTypeOfValues { get; }
@@ -29,7 +91,15 @@ namespace VL.Lib.Reactive
         void SetObjectAndAuthor(object? @object, string? author);
         IDisposable BeginChange();
         string? Path { get; }
-        internal int Revision { get; }
+        int Revision { get; }
+        AccessorNodes AccessorNodes { get; }
+
+        bool IsInitialized => Revision > 0;
+
+        /// <summary>
+        /// Is true for the rest of the application lifetime once the channel has been requested.
+        /// </summary>
+        bool HasBeenRequested { get; }
     }
 
     [MonadicTypeFilter(typeof(ChannelMonadicTypeFilter))]
@@ -51,6 +121,7 @@ namespace VL.Lib.Reactive
         protected int revisionOnLockTaken = 0;
 
         private IChannel<Spread<Attribute>>? attributesChannel;
+        private AccessorNodes? accessorNodes;
         private TagsCache? tagsCache;
 
         public ImmutableArray<object> Components { get; set; } = ImmutableArray<object>.Empty;
@@ -108,6 +179,8 @@ namespace VL.Lib.Reactive
         }
 
         object? IChannel.Object { get => Value; set => Value = (T?)value; }
+
+        public bool HasBeenRequested { get; internal set; }
 
         int IChannel.Revision => revision;
 
@@ -203,14 +276,16 @@ namespace VL.Lib.Reactive
             if (lockCount == 0 && revisionOnLockTaken != revision)
                 SetValueAndAuthor(this.Value, LatestAuthor);
         }
+        Spread<string> IHasAttributes.Tags => (tagsCache ??= new(GetAttributesChannel())).Tags;
 
         Spread<Attribute> IHasAttributes.Attributes => GetAttributesChannel().Value ?? Spread<Attribute>.Empty;
 
-        Spread<string> IHasAttributes.Tags => (tagsCache ??= new(GetAttributesChannel())).Tags;
-
         IChannel<Spread<Attribute>> GetAttributesChannel() => attributesChannel ??= this.Attributes();
 
+        AccessorNodes IChannel.AccessorNodes => accessorNodes ??= this.EnsureSingleComponentOfType(() => new AccessorNodes(), false);
+
         T? IMonadicValue<T>.Value => Value;
+
 
         IMonadicValue<T> IMonadicValue<T>.SetValue(T? value)
         {
@@ -338,11 +413,17 @@ namespace VL.Lib.Reactive
         {
             Path = path;
         }
+
+        void IInternalChannel.Request()
+        {
+            HasBeenRequested = true;
+        }
     }
 
     internal interface IInternalChannel
     {
         void SetPath(string path);
+        void Request();
     }
 
 
@@ -360,11 +441,11 @@ namespace VL.Lib.Reactive
 
     internal abstract class ChannelView_<T> : IChannel<T>
     {
-        static T asT(object? value)
+        static T? asT(object? value)
         {
             if (value is T t)
                 return t;
-            return default!;
+            return default;
         }
 
         protected readonly IChannel<object> original;
@@ -374,10 +455,18 @@ namespace VL.Lib.Reactive
             this.original = original.ChannelOfObject;
         }
 
+        public Func<object?, T?> AsT { get; init; } = asT;
+        public Func<T?, Optional<object?>> ToObject { get; init; } = v => v;
+
         public T? Value
         {
-            get => asT(original.Object);
-            set => original.Object = value;
+            get => AsT(original.Object);
+            set
+            {
+                var o = ToObject(value);
+                if (o.HasValue)
+                    original.Object = o.Value;
+            }
         }
 
         public Func<T?, Optional<T?>>? Validator
@@ -391,7 +480,7 @@ namespace VL.Lib.Reactive
                 }
                 original.Validator = v =>
                 {
-                    var opt = value(asT(v));
+                    var opt = value(AsT(v));
                     if (opt.HasValue)
                         return opt.Value;
                     return new Optional<object?>();
@@ -440,6 +529,10 @@ namespace VL.Lib.Reactive
 
         int IChannel.Revision => original.Revision;
 
+        public bool HasBeenRequested { get; internal set; }
+
+        public AccessorNodes AccessorNodes => original.AccessorNodes;
+
         public IDisposable BeginChange() => original.BeginChange();
 
         public void Dispose()
@@ -465,16 +558,18 @@ namespace VL.Lib.Reactive
 
         public IDisposable Subscribe(IObserver<T?> observer)
         {
-            return original.Subscribe(new ObserverWrapper(observer));
+            return original.Subscribe(new ObserverWrapper(observer, AsT));
         }
 
         private struct ObserverWrapper : IObserver<object?>
         {
             private readonly IObserver<T?> observer;
+            private readonly Func<object?, T?> asT;
 
-            public ObserverWrapper(IObserver<T?> observer)
+            public ObserverWrapper(IObserver<T?> observer, Func<object?, T?> asT)
             {
                 this.observer = observer;
+                this.asT = asT;
             }
 
             public void OnCompleted()
@@ -540,7 +635,7 @@ namespace VL.Lib.Reactive
 
         public static implicit operator T?(ChannelView<T> c) => c.Value;
 
-        public override string ToString() => original.ToString();
+        public override string? ToString() => original.ToString();
 
     }
 

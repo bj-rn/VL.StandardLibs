@@ -40,7 +40,7 @@ namespace VL.ImGui.Widgets
         {
         }
 
-        public Optional<string> Label { get => default /* Only accessed by generated code*/; set => label.SetPinValue(value!); }
+        public string? Label { get => default /* Only accessed by generated code*/; set => label.SetPinValue(string.IsNullOrEmpty(value) ? default : value); }
 
         public bool Bang 
         { 
@@ -75,7 +75,7 @@ namespace VL.ImGui.Widgets
 
         protected void SetValueIfChanged(T? oldValue, T newValue, ImGuiInputTextFlags flags)
         {
-            if (flags.HasFlag(ImGuiInputTextFlags.EnterReturnsTrue))
+            if (flags.HasFlag(ImGuiInputTextFlags.EnterReturnsTrue) || flags.HasFlag(ImGuiInputTextFlags.ItemDeactivationReturnsTrue))
                 Value = newValue;
             else if (!EqualityComparer<T>.Default.Equals(oldValue, newValue))
                 Value = newValue;

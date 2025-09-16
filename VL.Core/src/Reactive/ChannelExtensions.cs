@@ -278,5 +278,15 @@ namespace VL.Lib.Reactive
             return default;
         }
 
+
+        public static void AddAccessorNode(this IChannel channel, NodeContext node)
+        {
+            channel.AccessorNodes.AddAccessorNode(node);
+        }
+
+        public static void RemoveAccessorNode(this IChannel channel, NodeContext node)
+        {
+            channel.AccessorNodes.RemoveAccessorNode(node);
+        }
     }
 }

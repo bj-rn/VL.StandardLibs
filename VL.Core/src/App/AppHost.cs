@@ -33,6 +33,7 @@ namespace VL.Core
         /// The app host for the current thread or the global one if there's no host installed on the current thread.
         /// </summary>
         public static AppHost CurrentOrGlobal => current ?? Global;
+        internal static AppHost? CurrentOrGlobalOrNull => current ?? global;
 
         /// <summary>
         /// The app host for the whole application. 
@@ -53,15 +54,23 @@ namespace VL.Core
         [ThreadStatic]
         private static AppHost? current;
 
+        private IDisposable? globalSubscription;
+
         public AppHost()
         {
-            MakeGlobalIfNone().DisposeBy(this);
+            globalSubscription = MakeGlobalIfNone();
 
             IDisposable MakeGlobalIfNone()
             {
                 var original = Interlocked.CompareExchange(ref global, this, null);
                 return Disposable.Create(() => Interlocked.CompareExchange(ref global, original, this));
             }
+        }
+
+        protected internal void Shutdown()
+        {
+            var s = Interlocked.Exchange(ref globalSubscription, null);
+            s?.Dispose();
         }
 
         /// <summary>
@@ -220,8 +229,9 @@ namespace VL.Core
         /// </summary>
         /// <param name="type">The type to create.</param>
         /// <param name="nodeContext">The node context to use. Used by patched types.</param>
+        /// <param name="arguments">The arguments to use.</param>
         /// <returns>The new instance.</returns>
-        public abstract object? CreateInstance(IVLTypeInfo type, NodeContext? nodeContext = default);
+        public abstract object? CreateInstance(IVLTypeInfo type, NodeContext? nodeContext = default, IReadOnlyDictionary<string, object?>? arguments = null);
 
         /// <summary>
         /// Retrieves the default value of the given type. 
@@ -243,7 +253,8 @@ namespace VL.Core
 
         protected abstract void OnException(ExceptionDispatchInfo exceptionDispatchInfo);
 
-        internal object? CreateInstance(Type type, NodeContext? nodeContext = default) => CreateInstance(TypeRegistry.GetTypeInfo(type), nodeContext);
+        internal object? CreateInstance(Type type, NodeContext? nodeContext = default, IReadOnlyDictionary<string, object?>? arguments = null) 
+            => CreateInstance(TypeRegistry.GetTypeInfo(type), nodeContext, arguments);
 
         internal object? GetDefaultValue(Type type) => GetDefaultValue(TypeRegistry.GetTypeInfo(type));
 

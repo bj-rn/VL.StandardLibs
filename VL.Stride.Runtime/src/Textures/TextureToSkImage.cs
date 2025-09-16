@@ -4,8 +4,8 @@ using Stride.Core;
 using Stride.Engine;
 using Stride.Graphics;
 using VL.Core;
+using VL.Skia;
 using VL.Skia.Egl;
-using SkiaRenderContext = VL.Skia.RenderContext;
 using StrideRenderContext = Stride.Rendering.RenderContext;
 
 namespace VL.Stride.Textures
@@ -15,7 +15,7 @@ namespace VL.Stride.Textures
     {
         private static readonly PropertyKey<SKImage> SKImageView = new (nameof(SKImageView), typeof(TextureToSkImage));
         private static readonly PropertyKey<Texture> NonSrgbTexture = new (nameof(NonSrgbTexture), typeof(TextureToSkImage));
-        private readonly SkiaRenderContext renderContext = SkiaRenderContext.ForCurrentApp();
+        private readonly RenderContextProvider renderContextProvider = AppHost.Current.GetRenderContextProvider();
         private readonly CommandList commandList = GetCommandList();
 
         static CommandList GetCommandList()
@@ -29,7 +29,8 @@ namespace VL.Stride.Textures
                 return null;
 
             // Maybe Skia update will help here - for now make the copy :(
-            if (renderContext.UseLinearColorspace && texture.Format.IsSRgb())
+            var device = texture.GraphicsDevice;
+            if (device.ColorSpace == ColorSpace.Linear && texture.Format.IsSRgb())
             {
                 var nonSrgbTexture = texture.Tags.Get(NonSrgbTexture);
                 if (nonSrgbTexture is null)
@@ -53,6 +54,8 @@ namespace VL.Stride.Textures
                 var image = texture.Tags.Get(SKImageView);
                 if (image is null)
                 {
+                    var renderContext = renderContextProvider.GetRenderContext();
+                    using var _ = renderContext.MakeCurrent(forRendering: false);
                     image = D3D11Utils.TextureToSKImage(renderContext, nativeTexture.NativePointer).DisposeBy(texture);
                     texture.Tags.Set(SKImageView, image);
                 }
